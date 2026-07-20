@@ -2,9 +2,15 @@ import io
 import time
 import logging
 from threading import Condition
+import threading
+import imutils
+import cv2
 from picamera2 import Picamera2
 from picamera2.encoders import JpegEncoder
 from picamera2.outputs import FileOutput
+from servo import Servo
+from haarDetector  import haarDetector
+from ddnDetector  import ddnDetector
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -52,11 +58,17 @@ class VideoCamera(object):
         # --- Streaming Configuration ---
         # Reduced resolution for smoother web streaming and lower latency.
         # The hardware encoder works with YUV420 format.
+            #main={"size": (1280, 720), "format": "YUV420"},
         video_config = self.picam2.create_video_configuration(
-            main={"size": (1280, 720), "format": "YUV420"},
+            main={"size": (1296, 972), "format": "YUV420"},
             controls={"FrameRate": 30}
         )
         self.picam2.configure(video_config)
+
+        # Preview configuration for display (BGR888 format for OpenCV compatibility)
+        self.preview_config = self.picam2.create_preview_configuration(
+            main={"size": (1296, 972), "format": "BGR888"},
+        )
 
         # --- Still Image Configuration ---
         # A separate, higher-resolution configuration for taking still photos.
@@ -75,12 +87,35 @@ class VideoCamera(object):
         logging.info("Camera initialized and recording started.")
         time.sleep(1)  # Allow camera to warm up
 
+        #self.detector = haarDetector()
+        self.detector = ddnDetector()
+        info = self.picam2.global_camera_info();
+        fovs = (62.2, 48.8) 
+        match info:
+            case "ov5647":
+                fovs = (53.5, 41.41)
+            case "imx219":
+                fovs = (62.2, 48.8)
+            case "imx708":
+                fovs = (66, 41)
+            case "imx477":
+                fovs = (70.6, 43.3)
+            case "imx500":
+                fovs = (66, 52.3)
+        self.servo = Servo(fovs[0], fovs[1])
+        self.stop_pan_tilt_thread = False
+        self.pan_tilt_thread = threading.Thread(target=self.pan_tilt_thread_loop, daemon=True)
+        self.pan_tilt_thread.start()
+
     def __del__(self):
         """
         Stops the recording thread when the object is destroyed.
         """
         logging.info("Stopping camera recording.")
         self.picam2.stop_recording()
+        logging.info("Stopping Pan & tilt thread.")
+        self.stop_pan_tilt_thread = True
+        self.pan_tilt_thread.join(timeout=2)
 
     def get_frame(self) -> bytes:
         """
@@ -114,4 +149,32 @@ class VideoCamera(object):
             # Ensure the stream is restarted
             logging.info("Restarting video stream recording.")
             self.picam2.start_recording(self.encoder, FileOutput(self.output))
+
+    def pan_tilt_thread_loop(self):
+        print("Pan & tilt thread running...")
+        max_sleep_time = 2.5
+        sleep_increment = 0.100
+        sleep_time = sleep_increment
+        moves_threshold = 6
+        while self.stop_pan_tilt_thread is False:
+            frame = self.picam2.capture_array()
+            frame = self.detector.convert(frame)
+            (frame, size) = self.detector.resize(frame)
+            boxes = self.detector.detect(frame)
+            angles = []
+            for (x, y, w, h) in boxes:
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+                # save target angle to move to center of detected box
+                angles.append(self.servo.angles( (x+(w/2), y+(h/2)), size))
+            if len(angles) > 0:
+                cv2.imshow("Frame", frame)
+                cv2.waitKey(1)
+                nmoves = self.servo.goSlowlyToCloserAngle(angles)
+                if nmoves > moves_threshold:
+                    sleep_time = sleep_increment
+            # if nothing detected or no moves needed then sleep a bit
+            if len(angles) == 0 or nmoves <= moves_threshold:
+                time.sleep(sleep_time)
+                sleep_time = min(sleep_time + sleep_increment, max_sleep_time)
+            
 
