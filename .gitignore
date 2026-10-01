@@ -266,3 +266,6 @@ pyrightconfig.json
 *.jpg
 *.jpeg
 *.png
+
+
+servo.json
