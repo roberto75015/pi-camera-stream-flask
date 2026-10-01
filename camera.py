@@ -88,7 +88,8 @@ class VideoCamera(object):
         time.sleep(1)  # Allow camera to warm up
 
         #self.detector = haarDetector()
-        self.detector = ddnDetector()
+        #self.detector = ddnDetector()
+        self.detector = None
         info = self.picam2.global_camera_info();
         fovs = (62.2, 48.8) 
         match info:
@@ -103,9 +104,10 @@ class VideoCamera(object):
             case "imx500":
                 fovs = (66, 52.3)
         self.servo = Servo(fovs[0], fovs[1])
-        self.stop_pan_tilt_thread = False
-        self.pan_tilt_thread = threading.Thread(target=self.pan_tilt_thread_loop, daemon=True)
-        self.pan_tilt_thread.start()
+        if self.detector != None:
+            self.stop_pan_tilt_thread = False
+            self.pan_tilt_thread = threading.Thread(target=self.pan_tilt_thread_loop, daemon=True)
+            self.pan_tilt_thread.start()
 
     def __del__(self):
         """
@@ -114,8 +116,9 @@ class VideoCamera(object):
         logging.info("Stopping camera recording.")
         self.picam2.stop_recording()
         logging.info("Stopping Pan & tilt thread.")
-        self.stop_pan_tilt_thread = True
-        self.pan_tilt_thread.join(timeout=2)
+        if self.detector != None:
+            self.stop_pan_tilt_thread = True
+            self.pan_tilt_thread.join(timeout=2)
 
     def get_frame(self) -> bytes:
         """
